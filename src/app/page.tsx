@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Database } from '../types/supabase';
+import { get, set } from 'idb-keyval'; // IndexedDB helper
 
 type Message = Database['public']['Tables']['messages']['Row'];
 
@@ -10,16 +11,28 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [content, setContent] = useState('');
   const [hasMounted, setHasMounted] = useState(false);
+  const [syncQueue, setSyncQueue] = useState<Message[]>([]);
 
-  useEffect(() => setHasMounted(true), []);
-
+  // Load queued messages from IndexedDB on mount
   useEffect(() => {
-       alert("ABC");
-       console.log(!hasMounted);
+    setHasMounted(true);
+    async function loadQueue() {
+      const storedQueue = await get('syncQueue');
+      if (storedQueue && Array.isArray(storedQueue)) {
+        setSyncQueue(storedQueue);
+      }
+    }
+    loadQueue();
+  }, []);
 
-    // if (!hasMounted) return;
-    // if (!hasMounted) return;  // <— return null instead of <div>
- 
+  // Persist queue changes to IndexedDB
+  useEffect(() => {
+    if (!hasMounted) return;
+    set('syncQueue', syncQueue);
+  }, [syncQueue, hasMounted]);
+
+  // Fetch initial messages from Supabase
+  useEffect(() => {
     async function fetchMessages() {
       const { data, error } = await supabase
         .from('messages')
@@ -29,56 +42,86 @@ export default function Home() {
       if (error) {
         console.error('Fetch error:', error);
         setMessages([]);
-      } else if (!data) {
-        console.warn('No data received from Supabase');
-        setMessages([]);
-      } else {
+      } else if (data) {
         setMessages(data);
       }
     }
-
     fetchMessages();
-
-    // const channel = supabase
-    //   .channel('messages-realtime')
-    //   .on('postgres_changes',
-    //     { event: 'INSERT', schema: 'public', table: 'messages' },
-    //     (payload) => {
-    //       setMessages((current) => [payload.new as Message, ...current]);
-    //     }
-    //   )
-    //   .subscribe();
-
-    // return () => {
-    //   supabase.removeChannel(channel);
-    // };
   }, []);
 
-  async function addMessage(e: React.FormEvent) {
+  // Add message locally and queue for sync
+  function addMessage(e: React.FormEvent) {
     e.preventDefault();
     if (!content.trim()) return;
 
+    const tempId = `temp-${Date.now()}`;
+    const newMessage: Message = {
+      id: tempId,
+      content,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [newMessage, ...prev]);
+    setSyncQueue((prev) => [...prev, newMessage]);
+    setContent('');
+  }
+
+  // Manual sync triggered by button
+  async function syncMessages() {
+    console.log('syncQueue.length',syncQueue.length)
+    if (syncQueue.length === 0) return;
+
+    const messagesToSync = [...syncQueue];
     const { data, error } = await supabase
       .from('messages')
-      .insert([{ content }])
+      .insert(messagesToSync.map(({ id, ...msg }) => msg))
       .select();
 
     if (error) {
-      console.error('Insert error:', error);
+      console.error('Sync error:', error);
       return;
     }
 
-    if (data && data.length > 0) {
-      setMessages((prev) => [data[0], ...prev]);
-      setContent('');
+    if (data) {
+      // Replace temp messages with real DB messages
+      setMessages((prev) => {
+        // Remove temp messages
+        const filtered = prev.filter(
+          (m) => !m.id.toString().startsWith('temp-')
+        );
+        return [...data, ...filtered];
+      });
+      setSyncQueue([]); // Clear queue in state & IndexedDB via effect
     }
   }
 
-  // if (!hasMounted) return null;
+  // Realtime subscription to insert events
+  useEffect(() => {
+    const channel = supabase
+      .channel('messages-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const newMsg = payload.new as Message;
+          setMessages((prev) =>
+            prev.some((m) => m.id === newMsg.id) ? prev : [newMsg, ...prev]
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   return (
     <main style={{ maxWidth: 600, margin: 'auto', padding: 20 }}>
       <h1>Messages</h1>
+      <button onClick={syncMessages} style={{ marginBottom: 20, padding: 8 }}>
+        Sync Now
+      </button>
       <form onSubmit={addMessage} style={{ marginBottom: 20 }}>
         <input
           type="text"
@@ -92,7 +135,6 @@ export default function Home() {
           Add
         </button>
       </form>
-
       <ul>
         {messages.map(({ id, content }) => (
           <li key={id} style={{ padding: '8px 0', borderBottom: '1px solid #ccc' }}>
