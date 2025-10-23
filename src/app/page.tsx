@@ -14,10 +14,12 @@ export default function Home() {
   useEffect(() => setHasMounted(true), []);
 
   useEffect(() => {
+       alert("ABC");
+       console.log(!hasMounted);
+
     // if (!hasMounted) return;
-    if (!hasMounted) return;  // <— return null instead of <div>
-
-
+    // if (!hasMounted) return;  // <— return null instead of <div>
+ 
     async function fetchMessages() {
       const { data, error } = await supabase
         .from('messages')
@@ -37,19 +39,19 @@ export default function Home() {
 
     fetchMessages();
 
-    const channel = supabase
-      .channel('messages-realtime')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          setMessages((current) => [payload.new as Message, ...current]);
-        }
-      )
-      .subscribe();
+    // const channel = supabase
+    //   .channel('messages-realtime')
+    //   .on('postgres_changes',
+    //     { event: 'INSERT', schema: 'public', table: 'messages' },
+    //     (payload) => {
+    //       setMessages((current) => [payload.new as Message, ...current]);
+    //     }
+    //   )
+    //   .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    // return () => {
+    //   supabase.removeChannel(channel);
+    // };
   }, []);
 
   async function addMessage(e: React.FormEvent) {
@@ -72,7 +74,7 @@ export default function Home() {
     }
   }
 
-  if (!hasMounted) return null;
+  // if (!hasMounted) return null;
 
   return (
     <main style={{ maxWidth: 600, margin: 'auto', padding: 20 }}>
