@@ -5,14 +5,20 @@ import { supabase } from '../lib/supabaseClient';
 import { Database } from '../types/supabase';
 import { get, set } from 'idb-keyval'; // IndexedDB helper
 
-type Message = Database['public']['Tables']['messages']['Row'];
+type Message = Database['public']['Tables']['messages']['Row'] & {
+  id: number | string;
+};
+
+type LocalMessage = Omit<Message, 'id'> & {
+  id: number | string;
+};
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [content, setContent] = useState('');
   const [hasMounted, setHasMounted] = useState(false);
-  const [syncQueue, setSyncQueue] = useState<Message[]>([]);
-
+ const [messages, setMessages] = useState<LocalMessage[]>([]);
+const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
+  
   // Load queued messages from IndexedDB on mount
   useEffect(() => {
     setHasMounted(true);
@@ -55,11 +61,12 @@ export default function Home() {
     if (!content.trim()) return;
 
     const tempId = `temp-${Date.now()}`;
-    const newMessage: Message = {
+    const newMessage: LocalMessage = {
       id: tempId,
       content,
       created_at: new Date().toISOString(),
     };
+
 
     setMessages((prev) => [newMessage, ...prev]);
     setSyncQueue((prev) => [...prev, newMessage]);
