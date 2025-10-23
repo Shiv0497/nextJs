@@ -3,23 +3,23 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Database } from '../types/supabase';
-import { get, set } from 'idb-keyval'; // IndexedDB helper
+import { get, set } from 'idb-keyval';
 
-type Message = Database['public']['Tables']['messages']['Row'] & {
-  id: number | string;
-};
+type Message = Database['public']['Tables']['messages']['Row'];
 
+// Extend Message to allow string or number IDs for local temporary messages
 type LocalMessage = Omit<Message, 'id'> & {
   id: number | string;
 };
 
 export default function Home() {
+  const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [content, setContent] = useState('');
   const [hasMounted, setHasMounted] = useState(false);
- const [messages, setMessages] = useState<LocalMessage[]>([]);
-const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
-  
-  // Load queued messages from IndexedDB on mount
+
+  const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
+
+  // Load syncQueue from IndexedDB on mount
   useEffect(() => {
     setHasMounted(true);
     async function loadQueue() {
@@ -31,13 +31,18 @@ const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
     loadQueue();
   }, []);
 
-  // Persist queue changes to IndexedDB
+  // Save syncQueue to IndexedDB whenever it changes
   useEffect(() => {
     if (!hasMounted) return;
-    set('syncQueue', syncQueue);
+    set('syncQueue', syncQueue).then(() => {
+      // After persisting locally, trigger auto sync
+      if (syncQueue.length > 0) {
+        syncMessages();
+      }
+    });
   }, [syncQueue, hasMounted]);
 
-  // Fetch initial messages from Supabase
+  // Fetch messages from Supabase on mount
   useEffect(() => {
     async function fetchMessages() {
       const { data, error } = await supabase
@@ -67,18 +72,17 @@ const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
       created_at: new Date().toISOString(),
     };
 
-
     setMessages((prev) => [newMessage, ...prev]);
     setSyncQueue((prev) => [...prev, newMessage]);
     setContent('');
   }
 
-  // Manual sync triggered by button
+  // Sync queued messages to Supabase DB
   async function syncMessages() {
-    console.log('syncQueue.length',syncQueue.length)
     if (syncQueue.length === 0) return;
 
     const messagesToSync = [...syncQueue];
+
     const { data, error } = await supabase
       .from('messages')
       .insert(messagesToSync.map(({ id, ...msg }) => msg))
@@ -90,19 +94,19 @@ const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
     }
 
     if (data) {
-      // Replace temp messages with real DB messages
+      // Replace temp messages with DB persisted messages
       setMessages((prev) => {
-        // Remove temp messages
         const filtered = prev.filter(
           (m) => !m.id.toString().startsWith('temp-')
         );
         return [...data, ...filtered];
       });
-      setSyncQueue([]); // Clear queue in state & IndexedDB via effect
+      // Clear sync queue which will also update IndexedDB
+      setSyncQueue([]);
     }
   }
 
-  // Realtime subscription to insert events
+  // Realtime subscription to new messages inserted by others
   useEffect(() => {
     const channel = supabase
       .channel('messages-realtime')
@@ -126,9 +130,6 @@ const [syncQueue, setSyncQueue] = useState<LocalMessage[]>([]);
   return (
     <main style={{ maxWidth: 600, margin: 'auto', padding: 20 }}>
       <h1>Messages</h1>
-      <button onClick={syncMessages} style={{ marginBottom: 20, padding: 8 }}>
-        Sync Now
-      </button>
       <form onSubmit={addMessage} style={{ marginBottom: 20 }}>
         <input
           type="text"
